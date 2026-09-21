@@ -57,6 +57,8 @@ That's it — no Python setup, no virtualenv.
 
 For Claude Code users or any MCP client that reads `claude_desktop_config.json`-style configuration:
 
+Requires Python 3.11 or newer.
+
 ```bash
 pip install fattureincloud-mcp
 ```
@@ -90,6 +92,9 @@ Restart your MCP client after editing the config.
 | `FIC_SENDER_EMAIL` | required for `send_email` | Sender mailbox for courtesy copies |
 | `FIC_CACHE_DIR` | no | Override cache directory (default `~/.fattureincloud-mcp/cache`) |
 | `FIC_CACHE_DISABLED` | no | Set to `1` to disable the local cache |
+| `FIC_RUNTIME_DIR` | no | Override the per-interpreter runtime root (default `~/.fattureincloud-mcp/runtime`) |
+| `FIC_RUNTIME_LENIENT` | no | Set to `1` to continue past a Python/ABI mismatch instead of exiting |
+| `FIC_DEBUG` | no | Set to `1` to include tracebacks in tool error responses |
 
 **How to get the FattureInCloud credentials:** log into [FattureInCloud](https://secure.fattureincloud.it/), go to *Settings → API and Integrations*, create a **Manual Token** with the permissions you need. The `COMPANY_ID` is in the URL after `/c/` once you select a company.
 
@@ -152,6 +157,40 @@ The label must already exist; centers are managed from FattureInCloud's web UI (
 - Credentials live only in your `.env` (gitignored), shell, or MCP client `user_config`. They are never logged or transmitted to anyone other than FattureInCloud.
 - Full Privacy Policy: **https://media-form.it/privacy-policy.html**
 - See also [`docs/PRIVACY.md`](docs/PRIVACY.md) for a mirrored copy of the policy.
+
+## Troubleshooting
+
+### "Couldn't start ... Error: Connection closed"
+
+The server process exited before it could speak MCP. Run the self-check with
+the same Python Claude Desktop uses:
+
+```bash
+python3 server.py --selfcheck
+```
+
+It reports the interpreter, the resolved import paths, whether each dependency
+loads, and whether the token and company ID are set.
+
+The most common cause is a **Python version mismatch**. The bundle ships
+compiled dependencies for CPython 3.11-3.14; if your `python3` is something
+else, build a runtime for it:
+
+```bash
+bash scripts/repair-runtime.sh
+```
+
+That installs into `~/.fattureincloud-mcp/runtime/<abi>/`, which the server
+prefers over its own bundled copy and which survives reinstalling the
+extension. Restart Claude Desktop afterwards.
+
+Full background in [`docs/RUNTIME.md`](docs/RUNTIME.md).
+
+### Tools answer "Estensione FattureInCloud non configurata correttamente"
+
+The API token or company ID is missing or malformed. Open the extension's
+settings and check both fields; the company ID is the number in the
+FattureInCloud URL after `/c/`.
 
 ## Known issues
 

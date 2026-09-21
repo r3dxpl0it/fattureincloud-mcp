@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fattureincloud-mcp"
-version = "2.0.0"
+version = "2.1.0"
 description = "MCP Server for Fatture in Cloud API - Italian electronic invoicing with Claude AI"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "Mediaform s.c.r.l.", email = "info@media-form.it"}
@@ -31,15 +31,15 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Office/Business :: Financial :: Accounting",
 ]
 dependencies = [
-    "fattureincloud-python-sdk>=2.0.0",
-    "mcp>=1.0.0",
-    "python-dotenv>=1.0.0",
+    "fattureincloud-python-sdk>=2.1.3,<3",
+    "mcp>=1.27,<2",
 ]
 
 [project.urls]
@@ -52,4 +52,4 @@ Author = "https://media-form.it"
 fattureincloud-mcp = "server:main"
 
 [tool.setuptools]
-py-modules = ["server", "cache"]
+py-modules = ["server", "cache", "_runtime"]
