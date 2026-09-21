@@ -1,0 +1,7 @@
+-r requirements.txt
+
+pytest>=8.0
+pytest-asyncio>=0.23
+# Optional: lets server.py pick up a local .env during development.
+# Not shipped in the bundle - Claude Desktop passes configuration as env vars.
+python-dotenv>=1.0,<2

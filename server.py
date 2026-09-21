@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fatture in Cloud MCP Server - v2.0.0
+"""Fatture in Cloud MCP Server - v2.1.0
 
 MCP Server per integrare Fatture in Cloud con Claude AI.
 Permette di gestire fatture elettroniche italiane tramite conversazione.
@@ -8,24 +8,35 @@ Author: Mediaform s.c.r.l. (https://media-form.it)
 License: MIT
 """
 
+import calendar
 import json
 import os
+import sys
 import traceback
 from datetime import datetime, timedelta
+from pathlib import Path
 
-import fattureincloud_python_sdk as fic
-from fattureincloud_python_sdk.api.issued_documents_api import IssuedDocumentsApi
-from fattureincloud_python_sdk.api.issued_e_invoices_api import IssuedEInvoicesApi
-from fattureincloud_python_sdk.api.received_documents_api import ReceivedDocumentsApi
-from fattureincloud_python_sdk.api.clients_api import ClientsApi
-from fattureincloud_python_sdk.api.companies_api import CompaniesApi
-from fattureincloud_python_sdk.api.info_api import InfoApi
+# Bootstrap the bundled dependency tree *before* importing anything third-party.
+# On a Python/ABI mismatch this prints an actionable report and exits, instead
+# of dying on an opaque ModuleNotFoundError that Claude Desktop can only render
+# as "Error: Connection closed". See _runtime.py.
+import _runtime
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent, ToolAnnotations
+_runtime.bootstrap()
 
-import cache
+import fattureincloud_python_sdk as fic  # noqa: E402
+from fattureincloud_python_sdk.api.issued_documents_api import IssuedDocumentsApi  # noqa: E402
+from fattureincloud_python_sdk.api.issued_e_invoices_api import IssuedEInvoicesApi  # noqa: E402
+from fattureincloud_python_sdk.api.received_documents_api import ReceivedDocumentsApi  # noqa: E402
+from fattureincloud_python_sdk.api.clients_api import ClientsApi  # noqa: E402
+from fattureincloud_python_sdk.api.companies_api import CompaniesApi  # noqa: E402
+from fattureincloud_python_sdk.api.info_api import InfoApi  # noqa: E402
+
+from mcp.server import Server  # noqa: E402
+from mcp.server.stdio import stdio_server  # noqa: E402
+from mcp.types import Tool, TextContent, ToolAnnotations  # noqa: E402
+
+import cache  # noqa: E402
 
 
 def _ann(read_only=False, destructive=False, idempotent=False, open_world=True):
@@ -38,9 +49,77 @@ def _ann(read_only=False, destructive=False, idempotent=False, open_world=True):
         openWorldHint=open_world,
     )
 
-ACCESS_TOKEN = os.getenv("FIC_ACCESS_TOKEN", "")
-COMPANY_ID = int(os.getenv("FIC_COMPANY_ID", "0"))
-SENDER_EMAIL = os.getenv("FIC_SENDER_EMAIL", "")
+VERSION = "2.1.0"
+
+
+def _load_dotenv():
+    """Development convenience: read a .env sitting next to the server.
+
+    Documented by .env.example since the first release, but never actually
+    wired up. Existing environment variables always win, so the values Claude
+    Desktop passes to the extension are unaffected.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    env_file = Path(__file__).resolve().parent / ".env"
+    if env_file.is_file():
+        load_dotenv(env_file, override=False)
+
+
+_load_dotenv()
+
+#: Configuration problems found at import. Nothing here raises: a server that
+#: starts and explains itself beats one that dies, because Claude Desktop can
+#: only render a dead server as the unhelpful "Error: Connection closed".
+CONFIG_ERRORS: list[str] = []
+
+
+def _parse_company_id(raw):
+    """Parse FIC_COMPANY_ID without ever raising.
+
+    The manifest substitutes ${user_config.company_id}, so an unset field
+    arrives as an empty string - and int("") used to raise ValueError at
+    import, killing the server before it could say why.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        CONFIG_ERRORS.append(
+            "FIC_COMPANY_ID non impostato. Aprire le impostazioni dell'estensione "
+            "FattureInCloud e inserire il Company ID numerico (visibile nell'URL "
+            "di FattureInCloud dopo /c/)."
+        )
+        return 0
+    try:
+        return int(raw)
+    except ValueError:
+        CONFIG_ERRORS.append(
+            f"FIC_COMPANY_ID non valido ({raw!r}): deve essere un numero intero, "
+            "come mostrato nell'URL di FattureInCloud dopo /c/."
+        )
+        return 0
+
+
+ACCESS_TOKEN = os.getenv("FIC_ACCESS_TOKEN", "").strip()
+COMPANY_ID = _parse_company_id(os.getenv("FIC_COMPANY_ID"))
+SENDER_EMAIL = os.getenv("FIC_SENDER_EMAIL", "").strip()
+
+if not ACCESS_TOKEN:
+    CONFIG_ERRORS.append(
+        "FIC_ACCESS_TOKEN non impostato. Generare un token manuale da FattureInCloud "
+        "-> Impostazioni -> API e Integrazioni -> Token Manuale e incollarlo nelle "
+        "impostazioni dell'estensione."
+    )
+
+def _log(message):
+    """Diagnostics go to stderr - stdout is the MCP stdio transport and any
+    stray write there corrupts the protocol framing."""
+    print(f"[fattureincloud-mcp] {message}", file=sys.stderr)
+
+
+for _problem in CONFIG_ERRORS:
+    _log(f"CONFIG: {_problem}")
 
 configuration = fic.Configuration()
 configuration.access_token = ACCESS_TOKEN
@@ -54,6 +133,19 @@ companies_api = CompaniesApi(api_client)
 info_api = InfoApi(api_client)
 
 app = Server("fattureincloud")
+
+
+def month_bounds(year, month):
+    """First and last day of a month as ISO dates.
+
+    Leap-year aware: February previously hardcoded 29 days, which builds an
+    impossible date like 2025-02-29 in the FattureInCloud query filter.
+    """
+    month = int(month)
+    if not 1 <= month <= 12:
+        raise ValueError(f"Mese non valido: {month} (atteso 1-12)")
+    last_day = calendar.monthrange(int(year), month)[1]
+    return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last_day:02d}"
 
 
 def get_total_from_doc(d):
@@ -76,7 +168,8 @@ def get_client_by_id(client_id, *, company_id=None):
         data = response.data.to_dict()
         cache.put(resource, company_id, data)
         return data
-    except:
+    except Exception as exc:
+        _log(f"get_client_by_id({client_id}) fallito: {type(exc).__name__}: {exc}")
         return None
 
 
@@ -93,7 +186,8 @@ def get_ei_code_for_client(client_id, *, company_id=None):
             if pec:
                 return '0000000'
         return '0000000'
-    except:
+    except Exception as exc:
+        _log(f"get_ei_code_for_client({client_id}) fallito: {type(exc).__name__}: {exc}")
         return '0000000'
 
 
@@ -600,17 +694,26 @@ async def list_tools():
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    if CONFIG_ERRORS:
+        # Surface misconfiguration in the chat, where the user can act on it,
+        # rather than letting it fail as an opaque 401 from the API.
+        problems = "\n".join(f"- {p}" for p in CONFIG_ERRORS)
+        return [TextContent(
+            type="text",
+            text=f"Estensione FattureInCloud non configurata correttamente:\n{problems}",
+        )]
+
     try:
         if name == "list_invoices":
-            year = arguments.get("year", 2024)
+            year = arguments.get("year", datetime.now().year)
             month = arguments.get("month")
             query = arguments.get("query")
             doc_type = arguments.get("type", "invoice")
 
             q = f"date >= '{year}-01-01' and date <= '{year}-12-31'"
             if month:
-                last_day = 31 if month in [1,3,5,7,8,10,12] else 30 if month in [4,6,9,11] else 29
-                q = f"date >= '{year}-{month:02d}-01' and date <= '{year}-{month:02d}-{last_day}'"
+                start, end = month_bounds(year, month)
+                q = f"date >= '{start}' and date <= '{end}'"
 
             response = issued_api.list_issued_documents(
                 company_id=COMPANY_ID, type=doc_type, q=q, per_page=100, fieldset="detailed"
@@ -1217,8 +1320,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             query = arguments.get("query")
             q = f"date >= '{year}-01-01' and date <= '{year}-12-31'"
             if month:
-                last_day = 31 if month in [1,3,5,7,8,10,12] else 30 if month in [4,6,9,11] else 29
-                q = f"date >= '{year}-{month:02d}-01' and date <= '{year}-{month:02d}-{last_day}'"
+                start, end = month_bounds(year, month)
+                q = f"date >= '{start}' and date <= '{end}'"
             response = received_api.list_received_documents(
                 company_id=COMPANY_ID, type=doc_type, q=q, per_page=100, fieldset="detailed"
             )
@@ -1454,7 +1557,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=f"Tool '{name}' non trovato")]
 
     except Exception as e:
-        return [TextContent(type="text", text=f"Errore: {str(e)}\n{traceback.format_exc()}")]
+        _log(f"tool '{name}' fallito: {type(e).__name__}: {e}")
+        traceback.print_exc(file=sys.stderr)
+        detail = f"\n\n{traceback.format_exc()}" if os.getenv("FIC_DEBUG") == "1" else ""
+        return [TextContent(type="text", text=f"Errore nel tool '{name}': {e}{detail}")]
 
 
 async def main():
@@ -1462,6 +1568,60 @@ async def main():
         await app.run(read, write, app.create_initialization_options())
 
 
+def selfcheck():
+    """Print a runtime and configuration report; return a shell exit code.
+
+    Run it when the extension will not start:
+
+        python3 server.py --selfcheck
+    """
+    report = _runtime.resolve()
+    lines = [
+        f"fattureincloud-mcp {VERSION}",
+        "",
+        "Runtime",
+        f"  python        {report['python']}  (ABI {report['abi_tag']})",
+        f"  executable    {report['executable']}",
+        f"  bundle        {report['bundle']}",
+        f"  layout        {report['layout']}",
+        f"  bundled ABIs  {', '.join(report['bundled_abis']) or '-'}",
+        f"  import paths  {', '.join(report['paths']) or '(interpreter default)'}",
+    ]
+
+    deps = []
+    for module in ("mcp", "pydantic_core", "fattureincloud_python_sdk"):
+        try:
+            __import__(module)
+            deps.append(f"  {module:<26} OK")
+        except Exception as exc:  # pragma: no cover - depends on host
+            deps.append(f"  {module:<26} FAIL  {type(exc).__name__}: {exc}")
+    lines += ["", "Dependencies", *deps]
+
+    lines += ["", "Configuration"]
+    if CONFIG_ERRORS:
+        lines += [f"  PROBLEM  {p}" for p in CONFIG_ERRORS]
+    else:
+        lines += [
+            f"  company_id    {COMPANY_ID}",
+            f"  access_token  set ({len(ACCESS_TOKEN)} chars)",
+            f"  sender_email  {SENDER_EMAIL or '(not set)'}",
+        ]
+
+    ok = report["ok"] and not CONFIG_ERRORS and all("FAIL" not in d for d in deps)
+    lines += ["", "Result: " + ("ready" if ok else "NOT ready - see above")]
+    print("\n".join(lines))
+
+    if not report["ok"]:
+        print(_runtime.format_problem(report))
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
+    if "--selfcheck" in sys.argv[1:]:
+        raise SystemExit(selfcheck())
+    if "--version" in sys.argv[1:]:
+        print(VERSION)
+        raise SystemExit(0)
+
     import asyncio
     asyncio.run(main())

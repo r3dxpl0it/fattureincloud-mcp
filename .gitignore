@@ -34,3 +34,5 @@ icon-original.png
 
 # MCPB build outputs
 lib/
+.build-staging/
+uv.lock

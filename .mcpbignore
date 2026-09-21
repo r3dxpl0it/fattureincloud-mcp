@@ -34,7 +34,6 @@ dist/
 
 # Excluded from the MCPB bundle
 tests/
-scripts/
 docs/
 .github/
 .env
@@ -45,6 +44,21 @@ AUDIT_REPORT.md
 pyproject.toml
 requirements.txt
 icon-original.png
+.build-staging/
+
+# Build tooling stays out. scripts/repair-runtime.sh deliberately does NOT:
+# when the bundled ABIs do not match the user's python3, _runtime.py prints
+# that exact path as the fix, so it has to exist inside the installed bundle.
+# (Listed file by file rather than `scripts/*` + a `!` negation, which the
+# packer does not honour.)
+scripts/build.sh
+scripts/validate.sh
+scripts/_split_abi.py
+
+# Dev-only files
+requirements-dev.txt
+uv.lock
+.venv/
 
 # server.json is metadata for the MCP Registry (modelcontextprotocol.io),
 # unrelated to the Claude Desktop MCPB bundle. Keep it tracked in git but

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "fattureincloud",
   "display_name": "FattureInCloud",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Manage your FattureInCloud account from Claude: invoices, e-invoicing (SDI), clients, cost / revenue centers, and supplier documents.",
   "long_description": "FattureInCloud is the leading Italian SaaS for electronic invoicing. Italy mandates B2B/B2C e-invoicing through the Sistema di Interscambio (SDI) — this community-built MCP server brings AI-assisted billing to that compliance-driven workflow. Read and write operations are supported across invoices, credit notes, proformas, received documents, clients, and cost / revenue centers, plus a yearly financial dashboard. API calls go directly from the user's machine to FattureInCloud's API; no data is routed through third-party servers. This is an unofficial integration. Not affiliated with, endorsed by, or sponsored by TeamSystem S.p.A., owner of the FattureInCloud trademark.",
   "author": {
@@ -97,7 +97,7 @@
     "platforms": ["darwin", "linux", "win32"],
     "claude_desktop": ">=0.7.0",
     "runtimes": {
-      "python": ">=3.10"
+      "python": ">=3.11,<3.15"
     }
   }
 }

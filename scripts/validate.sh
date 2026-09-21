@@ -61,6 +61,56 @@ else
   warn "jq not available or manifest missing; skipping version coherence check"
 fi
 
+# 2b. server.json (MCP Registry metadata) tracks the same release
+if [[ -f server.json ]] && command -v jq >/dev/null 2>&1; then
+  registry_version=$(jq -r '.version' server.json)
+  echo "server.json:      $registry_version"
+  if [[ -n "${manifest_version:-}" && "$registry_version" != "$manifest_version" ]]; then
+    err "server.json version != manifest version"
+  fi
+fi
+
+# 2c. ABI layout: every compiled extension must sit under the ABI it was built
+# for, and nothing version-locked may hide in shared/. Getting this wrong is
+# what made v2.0.0 unstartable on any Python that was not 3.12.
+if [[ -d lib ]]; then
+  if python3 - <<'PYCHECK'
+import re, sys
+from pathlib import Path
+
+lib = Path("lib")
+locked = re.compile(r"\.(?:cpython-3(\d+)|cp3(\d+))-[^.]*\.(?:so|pyd)$")
+abis = sorted(p.name for p in lib.iterdir() if p.is_dir() and re.fullmatch(r"cp\d{3,}", p.name))
+problems = []
+
+if not abis and (lib / "shared").is_dir():
+    problems.append("lib/shared exists but no ABI directories were built")
+
+for abi in abis:
+    expected = abi[2:]
+    for ext in list((lib / abi).rglob("*.so")) + list((lib / abi).rglob("*.pyd")):
+        m = locked.search(ext.name)
+        if not m:
+            problems.append(f"{abi}/{ext.name} is portable; it belongs in shared/")
+        elif f"3{m.group(1) or m.group(2)}" != expected:
+            problems.append(f"{abi}/{ext.name} is built for the wrong version")
+
+shared = lib / "shared"
+if shared.is_dir():
+    for ext in list(shared.rglob("*.so")) + list(shared.rglob("*.pyd")):
+        if locked.search(ext.name):
+            problems.append(f"shared/{ext.name} is version-locked")
+
+if problems:
+    print("\n".join(problems))
+    sys.exit(1)
+print(f"lib/ ABI layout: {', '.join(abis) or 'flat'} OK")
+PYCHECK
+  then :; else err "lib/ ABI layout is inconsistent (see above)"; fi
+else
+  warn "lib/ not built; skipping ABI layout check (run ./scripts/build.sh)"
+fi
+
 # 3. Tool count coherence (manifest declared vs server runtime)
 if [[ -f "$MANIFEST" ]] && command -v jq >/dev/null 2>&1; then
   declared=$(jq -r '.tools | length' "$MANIFEST")
