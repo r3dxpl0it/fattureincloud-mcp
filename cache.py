@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -54,7 +55,31 @@ def put(resource: str, company_id: str | int, value: Any) -> None:
         return
     path = _cache_path(resource, company_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Cached payloads are client and supplier registries: names, VAT numbers,
+    # addresses. Keep them owner-only rather than world-readable 0644.
+    _restrict(path.parent, 0o700)
+
+    # Write atomically: a crash or a concurrent writer used to be able to leave
+    # a half-written file that every later read discarded as corrupt JSON.
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2)
+        _restrict(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _restrict(path: Path, mode: int) -> None:
+    """Best-effort permission tightening; never fatal (e.g. on a FAT volume)."""
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
 
 
 def invalidate(resource: str, company_id: str | int) -> None:
